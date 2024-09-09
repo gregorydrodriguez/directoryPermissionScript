@@ -1,0 +1,200 @@
+#!/bin/bash
+
+## Base case ##
+if [ $# -gt 1 ] # If number of arguments is greater than one, exit script
+then
+        echo "Too many arguments"
+        exit 1
+fi
+
+dir="" # Initialize an empty variable that will hold the absolute path of a directory
+
+if [ $# -eq 0 ] # If no arguments have been provided, default the value of dir to the current working directory
+then
+        dir=$(pwd)
+        echo "$dir"
+elif [ $# -eq 1 ] && [ -d "$1" ] # If there is one argument and it is a directory
+then
+        dir=$(realpath "$1") # Use realpath to convert to absolute path. Alternative syntax: dir=$1
+else
+        echo "Argument is not a directory"
+        exit 1
+fi
+
+## Function to manipulate a display of directories, cursor positioning and permissions ##
+display() {
+        local dir="$1"
+        local path=() # Initialize an empty array that will store directory names in order of directory hierarchy
+        local idx= # Initialize an empty variable to track a directory that will work cohesively with vertical cursor positioning
+
+
+        while [ "$dir" != "/" ] # Loop until 'dir' is '/'
+        do
+                reverse+=("$dir") # Add the current directory's path to the array
+                dir=$(dirname "$dir") # Change the value to the parent directory's absolute path
+        done
+
+        reverse+=("/") # Add root to the array
+
+        # Reverse array  
+        len=${#reverse[@]}
+        for ((i=len-1; i >=0; i-- ))
+        do
+                name="${reverse[i]}"
+                if [ -e "$name" ]; # If directory exists
+                then
+                        path+=("$name") # Add to the path array
+                fi
+        done
+
+        # Nested function to be called after every user interaction
+        print_display() {
+                idx=$1 # Index for tracking the current directory
+                clear # Clear the terminal to create a clean display for the end-user
+                echo "Owner Group Other Filename"
+                echo "_____ _____ _____ ________"
+
+                # Iterate through each directory path and print a custom display of the permissions
+                for ((j=0; j < ${#path[@]}; j++))
+                do
+                        local name="${path[$j]}"
+                        local permissions
+                        permissions=$(ls -ld "$name" | awk '{print substr($1, 2, 1) " " substr($1, 3, 1) " " substr($1, 4, 1) " " substr($1, 5, 1) " " substr($1, 6, 1) " " substr($1, 7, 1) " " substr($1, 8, 1) " " substr($1, 9, 1) " " substr($1, 10, 1)}')
+                        delim="/"
+                        if [ "$j" -ne 0 ] # When our 'j' is 0 we have a special case display for the root
+                        then
+                                printf "%s %s\n" "$permissions" "${name##*$delim}" # Display permissions and directory without it's full path
+                        else
+                                printf "%s %s\n" "$permissions" "${name}" # Special case display when root is the same character as our delimiter
+                        fi
+
+                        if [ "$j" -eq "$idx" ] # When 'j' and 'idx' are the same value, that is our current working directory which requires an extra detail to be displayed
+                        then
+                                ls -ld "$name" | awk '{print "Links: " $2, "Owner: " $3, "Group: " $4, "Size: " $5, "Modified: " $6, $7, $8}' # If cursor is on the same row as a directory, detailed information is to be displayed underneath
+                        else
+                                echo # If the cursor is not on the same row, we supplement a blank line
+                        fi
+                done
+
+                last_line=$(tput lines) # Initialize a variable for the last line of the display
+                tput cup "$((last_line-5))" 0 # Set cursor 5th last line to fit the following print statements within the current display
+                echo "Valid keys: u(up), j(down): move vertically between directories"
+                echo "            h(left), k(right): move horizontally between permissions"
+                echo "            r, w, x, -: change permissions to read, write, execute, and none respectively"
+                echo "            q: quit" 
+                incrementor=$((2*idx+2))
+                tput cup $incrementor $horizontal_pos # Set cursor to the correct horizontal and vertical position
+        }
+
+        # Nested function to update permissions for a directory
+        update_permissions() {
+                local dir="${path[$idx]}" # Set local dir to the current directory
+                local perm # Variable to indicate which change type
+                local perm_change # Variable to indicate user, group, and other
+                local current_perm # Variable to store the current permission of the cursor's position
+            
+                case "$horizontal_pos" in
+                        0|2|4)
+                                perm_change="u"
+                                ;;
+                        6|8|10)
+                                perm_change="g"
+                                ;;
+                        12|14|16)
+                                perm_change="o"
+                                ;;
+                        *)
+                                return
+                                ;;
+                esac
+
+                case "$2" in
+                        r)
+                                perm="+r"
+                                ;;
+                        w)
+                                perm="+w"
+                                ;;
+                        x)
+                                perm="+x"
+                                ;;
+                        -)
+                                current_perm=$(ls -ld "$dir" | awk -v pos="$horizontal_pos" '{ print substr($1, pos/2+2, 1) }') # Logic to extract the correct permission in regard to the horizontal position
+                                if [ "$current_perm" == "-" ] 
+                                then
+                                        return 
+                                fi
+                                perm="$current_perm" 
+                                ;;
+                        *)
+                                return
+                                ;;
+                esac
+
+                if [ "$2" == "-" ]; then # Depending on the second argument provided, we either add or remove the permission.
+                        chmod "$perm_change-$perm" "$dir" 2>/dev/null # Remove permission or send error to the bit bucket
+                else
+                        chmod "$perm_change+$perm" "$dir" 2>/dev/null # Add permission or send error tot he bit bucket
+                fi
+        }
+
+        #initial display and horizontal cursor positioning
+        horizontal_pos=18
+        print_display 0
+
+        # Main loop of interaction in regard to the end-user to navigate the display and handle permission inputs
+        while true
+        do
+                read -n 1 -s opt
+                case "$opt" in
+                        u)
+                                # Move up in the display
+                                if [ $idx -gt 0 ]
+                                then
+                                        idx=$((idx-1))
+                                        print_display $idx
+                                fi
+                                ;;
+                        j)
+                                # Move down in the display
+                                if [ $idx -lt $((${#path[@]}-1)) ]
+                                then
+                                        idx=$((idx+1))
+                                        print_display $idx
+                                fi
+                                ;;
+                        h)
+                                # Move left in the display
+                                if [ $horizontal_pos -gt 0 ]
+                                then
+                                        horizontal_pos=$((horizontal_pos-2))
+                                        tput cup $incrementor $horizontal_pos
+                                fi
+                                ;;
+                        k)
+                                # Move right in the display
+                                if [ $horizontal_pos -lt 18 ]
+                                then
+                                        horizontal_pos=$((horizontal_pos+2))
+                                        tput cup $incrementor $horizontal_pos
+                                fi
+                                ;;
+                        r|w|x|-)
+                                # Call nested function 'update_permissions' with the selected option as an argument
+                                if [ $horizontal_pos -lt 17 ]
+                                then
+                                    update_permissions $horizontal_pos "$opt"
+                                fi
+                                print_display $idx
+                                ;;
+                        q)
+                                clear
+                                exit 0
+                                ;;
+                        *)
+                                ;;
+                esac
+        done
+}
+
+display "$dir" # Call our main function with current working directory or provided directory
