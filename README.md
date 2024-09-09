@@ -1,0 +1,2 @@
+# directoryPermissionScript
+Bash Script
